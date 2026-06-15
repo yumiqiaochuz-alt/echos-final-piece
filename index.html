@@ -685,6 +685,15 @@
             transform: scale(1.05);
         }
 
+        .action-btn span {
+            pointer-events: none;
+            user-select: none;
+        }
+
+        .action-btn.liked {
+            color: var(--deep-rose);
+        }
+
         /* EMPTY STATE */
         .empty-state {
             text-align: center;
@@ -1278,8 +1287,8 @@
                     </div>
                     <div class="post-content">${escapeHtml(post.content)}</div>
                     <div class="post-actions">
-                        <button class="action-btn" onclick="likePost('${post.id}')">
-                            <span>🤍</span>
+                        <button class="action-btn ${localStorage.getItem('liked_' + post.id) ? 'liked' : ''}" onclick="likePost(this, '${post.id}')" ${localStorage.getItem('liked_' + post.id) ? 'disabled' : ''}>
+                            <span>${localStorage.getItem('liked_' + post.id) ? '❤️' : '🤍'}</span>
                             <span>${post.likes || 0}</span>
                         </button>
                         <button class="action-btn" onclick="sharePost('${post.id}')">
@@ -1352,8 +1361,8 @@
                     </div>
                     <div class="post-content">${escapeHtml(post.content)}</div>
                     <div class="post-actions">
-                        <button class="action-btn" onclick="likePost('${post.id}')">
-                            <span>🤍</span>
+                        <button class="action-btn ${localStorage.getItem('liked_' + post.id) ? 'liked' : ''}" onclick="likePost(this, '${post.id}')" ${localStorage.getItem('liked_' + post.id) ? 'disabled' : ''}>
+                            <span>${localStorage.getItem('liked_' + post.id) ? '❤️' : '🤍'}</span>
                             <span>${post.likes || 0}</span>
                         </button>
                         <button class="action-btn" onclick="sharePost('${post.id}')">
@@ -1395,7 +1404,38 @@
             renderPosts();
         }
 
-        async function likePost(id) {
+        async function likePost(btn, id) {
+            if (!btn || btn.disabled) return;
+
+            const likedKey = 'liked_' + id;
+            if (localStorage.getItem(likedKey)) {
+                alert('💗 You already liked this whisper!');
+                return;
+            }
+
+            // Optimistic UI update - do this FIRST and keep it even if Supabase fails
+            const countSpan = btn.querySelector('span:last-child');
+            const heartSpan = btn.querySelector('span:first-child');
+            const currentLikes = parseInt(countSpan?.textContent) || 0;
+
+            btn.classList.add('liked');
+            if (heartSpan) heartSpan.textContent = '❤️';
+            if (countSpan) countSpan.textContent = currentLikes + 1;
+            btn.disabled = true;
+            localStorage.setItem(likedKey, 'true');
+
+            // Update local data immediately
+            const postIdx = allPosts.findIndex(p => p.id === id);
+            if (postIdx !== -1) {
+                allPosts[postIdx].likes = currentLikes + 1;
+            }
+
+            // Skip Supabase for temp posts (new posts not yet in DB)
+            if (id.startsWith('temp-')) {
+                return;
+            }
+
+            // Try to update Supabase in the background - don't block UI
             try {
                 const { data: post } = await supabaseClient
                     .from('posts')
@@ -1411,11 +1451,15 @@
                     .eq('id', id);
 
                 if (error) throw error;
-                loadPosts();
 
+                // Update local data with confirmed value
+                if (postIdx !== -1) {
+                    allPosts[postIdx].likes = newLikes;
+                }
             } catch (err) {
-                console.error('Error liking post:', err);
-                alert('💌 Could not like this whisper. Please try again.');
+                console.error('Error updating like in database:', err);
+                // DON'T revert the UI - the user already saw the like succeed
+                // Just log the error for debugging
             }
         }
 
